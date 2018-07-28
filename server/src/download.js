@@ -7,7 +7,11 @@ const PARA = 10;
 
 const url = 'mongodb://localhost:27017';
 
-const DOWNLOAD_COUNT = 200000;
+// const DOWNLOAD_COUNT = 200000; // 32
+// const DOWNLOAD_COUNT = 400000; // 16
+// const DOWNLOAD_COUNT = 800000; // 8
+const DOWNLOAD_COUNT = 1600000; // 4
+
 const i = parseInt(process.argv[process.argv.length - 1], 10) || 0;
 const startBlock = i * DOWNLOAD_COUNT;
 
