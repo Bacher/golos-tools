@@ -6,7 +6,7 @@ const Gauge = require('gauge');
 const url = 'mongodb://localhost:27017';
 
 const START = 1;
-const LIMIT = 6000000;
+const LIMIT = 17600000;
 const STEP = 1000;
 
 async function run() {

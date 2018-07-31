@@ -5,9 +5,9 @@ const DiffMatchPatch = require('diff-match-patch');
 const dmp = new DiffMatchPatch();
 
 const url = 'mongodb://localhost:27017';
+const LIMIT = 1000000;
 
-const START = 1;
-const LIMIT = 100000;
+let stop = false;
 
 const actions = new Set();
 
@@ -22,13 +22,14 @@ async function init() {
 
     const db = client.db('GolosSideCar');
 
-    for (let col of ['posts', 'comments', 'accounts']) {
+    for (let col of ['posts', 'comments', 'accounts', 'meta']) {
         try {
             await db.dropCollection(col);
         } catch (err) {}
     }
 
     const blocks = db.collection('blocks');
+    const meta = db.collection('meta');
     const posts = db.collection('posts');
     const comments = db.collection('comments');
     const accounts = db.collection('accounts');
@@ -63,11 +64,14 @@ async function init() {
         }
     );
 
-    await accounts.createIndex({
-        account: 1,
-    }, {
-        unique: true,
-    });
+    await accounts.createIndex(
+        {
+            account: 1,
+        },
+        {
+            unique: true,
+        }
+    );
 
     const dbo = {
         blocks,
@@ -76,12 +80,26 @@ async function init() {
         accounts,
     };
 
-    for (let blockNum = START; blockNum < LIMIT; ++blockNum) {
+    const metaSync = await meta.findOne({ id: 'sync' });
+    const startBlockId = metaSync ? metaSync.lastAppliedBlock + 1 : 1;
+    const lastBlockId = startBlockId + LIMIT - 1;
+
+    for (let blockNum = startBlockId; blockNum < lastBlockId; ++blockNum) {
         const block = await blocks.findOne({ blockNum }, { transactions: 1 });
         await parseBlock(blockNum, block, dbo);
+        await meta.updateOne(
+            { id: 'sync' },
+            { $set: { lastAppliedBlock: blockNum } },
+            { upsert: true }
+        );
+
+        if (stop) {
+            console.log('Graceful shutdown');
+            break;
+        }
     }
 
-    console.log(actions);
+    //console.log(actions);
 
     await client.close();
     console.log(
@@ -191,7 +209,7 @@ async function parseOperation(blockNum, block, db, action, params) {
                 }
             );
         } else {
-            console.log(blockNum, 'insert:', fullPermLink);
+            console.log(blockNum, 'Insert:', fullPermLink);
 
             await db.posts.insertOne({
                 fullPermLink,
@@ -213,9 +231,12 @@ async function parseOperation(blockNum, block, db, action, params) {
             params.parent_author + '/' + params.parent_permlink;
         const fullPermLink = params.author + '/' + params.permlink;
 
-        const already = await db.comments.findOne({
-            fullPermLink,
-        }, { body: 1, blocks: 1 });
+        const already = await db.comments.findOne(
+            {
+                fullPermLink,
+            },
+            { body: 1, blocks: 1 }
+        );
 
         if (already) {
             let body;
@@ -227,15 +248,17 @@ async function parseOperation(blockNum, block, db, action, params) {
                 body = params.body;
             }
 
-            await db.comments.updateOne({
-                fullPermLink,
-            }, {
-                $set: {
-                    body,
-                    blocks: [...already.blocks, blockNum],
+            await db.comments.updateOne(
+                {
+                    fullPermLink,
+                },
+                {
+                    $set: {
+                        body,
+                        blocks: [...already.blocks, blockNum],
+                    },
                 }
-            });
-
+            );
         } else {
             const comment = {
                 fullPermLink,
@@ -280,7 +303,9 @@ async function parseOperation(blockNum, block, db, action, params) {
         await db.accounts.insertOne({
             creator: params.creator,
             account: params.new_account_name,
-            metadata: params.json_metadata ? JSON.parse(params.json_metadata) : null,
+            metadata: params.json_metadata
+                ? JSON.parse(params.json_metadata)
+                : null,
         });
         return;
     }
@@ -288,13 +313,18 @@ async function parseOperation(blockNum, block, db, action, params) {
     if (action === 'account_update') {
         //console.log(blockNum, 'update account', params.new_account_name);
 
-        await db.accounts.updateOne({
-            account: params.account,
-        }, {
-            $set: {
-                metadata: params.json_metadata ? JSON.parse(params.json_metadata) : null,
+        await db.accounts.updateOne(
+            {
+                account: params.account,
+            },
+            {
+                $set: {
+                    metadata: params.json_metadata
+                        ? JSON.parse(params.json_metadata)
+                        : null,
+                },
             }
-        });
+        );
         return;
     }
 }
@@ -302,4 +332,14 @@ async function parseOperation(blockNum, block, db, action, params) {
 init().catch(err => {
     console.error(err);
     process.exit(10);
+});
+
+process.once('SIGINT', () => {
+    console.log('try to stop');
+    stop = true;
+});
+
+process.once('SIGTERM', () => {
+    console.log('try to stop');
+    stop = true;
 });
